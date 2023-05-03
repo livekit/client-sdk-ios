@@ -18,6 +18,7 @@ import Foundation
 import WebRTC
 import Promises
 import SwiftProtobuf
+import Combine
 
 internal typealias TransportOnOffer = (RTCSessionDescription) -> Promise<Void>
 
@@ -35,6 +36,12 @@ internal class Transport: MulticastDelegate<TransportDelegate> {
 
     public var connectionState: RTCPeerConnectionState {
         DispatchQueue.webRTC.sync { pc.connectionState }
+    }
+    
+    
+    private var connectionStateSubject: CurrentValueSubject<RTCPeerConnectionState, Never>
+    public var connectionStatePublisher: AnyPublisher<RTCPeerConnectionState, Never> {
+        connectionStateSubject.eraseToAnyPublisher()
     }
 
     public var localDescription: RTCSessionDescription? {
@@ -93,6 +100,7 @@ internal class Transport: MulticastDelegate<TransportDelegate> {
         self.target = target
         self.primary = primary
         self.pc = pc
+        self.connectionStateSubject = CurrentValueSubject<RTCPeerConnectionState, Never>(pc.connectionState)
 
         super.init()
 
@@ -129,6 +137,11 @@ internal class Transport: MulticastDelegate<TransportDelegate> {
             self.pendingCandidates.append(candidate)
         }
     }
+    
+    //WIP:
+    func setRemoteDescription(_ sd: RTCSessionDescription) async {
+        fatalError()
+    }
 
     @discardableResult
     func setRemoteDescription(_ sd: RTCSessionDescription) -> Promise<Void> {
@@ -147,6 +160,30 @@ internal class Transport: MulticastDelegate<TransportDelegate> {
 
             return Promise(())
         }
+    }
+    
+    func _createAndSendOffer(iceRestart: Bool = false) async throws -> RTCSessionDescription {
+        var constraints = [String: String]()
+        if iceRestart {
+            log("Restarting ICE...")
+            constraints[kRTCMediaConstraintsIceRestart] = kRTCMediaConstraintsValueTrue
+            restartingIce = true
+        }
+
+        if signalingState == .haveLocalOffer, !(iceRestart && remoteDescription != nil) {
+            renegotiate = true
+        }
+        
+        if signalingState == .haveLocalOffer, iceRestart, let sd = remoteDescription {
+            await withUnsafeContinuation { continuation in
+                setRemoteDescriptionPromise(sd).then(on: queue) { _ in
+                    continuation.resume()
+                }
+            }
+        }
+            
+        let offer = try await self.createOffer(for: constraints)
+        return try await self.setLocalDescription(offer)
     }
 
     @discardableResult
@@ -185,6 +222,26 @@ internal class Transport: MulticastDelegate<TransportDelegate> {
         }
 
         return negotiateSequence()
+    }
+    
+    func _close() async {
+        // prevent debounced negotiate firing
+        self.debounceWorkItem?.cancel()
+        self.statsTimer.suspend()
+
+        await withUnsafeContinuation({ continuation in
+            DispatchQueue.webRTC.async {
+                // Stop listening to delegate
+                self.pc.delegate = nil
+                // Remove all senders (if any)
+                for sender in self.pc.senders {
+                    self.pc.removeTrack(sender)
+                }
+                
+                self.pc.close()
+                continuation.resume()
+            }
+        })
     }
 
     func close() -> Promise<Void> {
@@ -264,6 +321,7 @@ extension Transport: RTCPeerConnectionDelegate {
 
     internal func peerConnection(_ peerConnection: RTCPeerConnection, didChange state: RTCPeerConnectionState) {
         log("did update state \(state) for \(target)")
+        connectionStateSubject.send(state)
         notify { $0.transport(self, didUpdate: state) }
     }
 
@@ -321,6 +379,25 @@ extension Transport: RTCPeerConnectionDelegate {
 
 private extension Transport {
 
+    func createOffer(for constraints: [String: String]? = nil) async throws -> RTCSessionDescription {
+        try await withUnsafeThrowingContinuation { continuation in
+            DispatchQueue.webRTC.async {  //<< once actor isolation is established, this becomes unnecessary
+                
+                let mediaConstraints = RTCMediaConstraints(mandatoryConstraints: constraints, optionalConstraints: nil)
+                self.pc.offer(for: mediaConstraints) { sd, error in
+
+                    guard let sd = sd else {
+                        let engineError = EngineError.webRTC(message: "Failed to create offer", error)
+                        continuation.resume(throwing: engineError)
+                        return
+                    }
+
+                    continuation.resume(returning: sd)
+                }
+            }
+        }
+    }
+    
     func createOffer(for constraints: [String: String]? = nil) -> Promise<RTCSessionDescription> {
 
         Promise<RTCSessionDescription>(on: .webRTC) { complete, fail in
@@ -340,6 +417,23 @@ private extension Transport {
         }
     }
 
+    func setRemoteDescription(_ sd: RTCSessionDescription) async throws -> RTCSessionDescription {
+        try await withUnsafeThrowingContinuation { continuation in
+            DispatchQueue.webRTC.async {  //<< once actor isolation is established, this becomes unnecessary
+                self.pc.setRemoteDescription(sd) { error in
+
+                    guard error == nil else {
+                        let engineError = EngineError.webRTC(message: "failed to set remote description", error)
+                        continuation.resume(throwing: engineError)
+                        return
+                    }
+
+                    continuation.resume(returning: sd)
+                }
+            }
+        }
+    }
+    
     func setRemoteDescriptionPromise(_ sd: RTCSessionDescription) -> Promise<RTCSessionDescription> {
 
         Promise<RTCSessionDescription>(on: .webRTC) { complete, fail in
@@ -396,6 +490,23 @@ internal extension Transport {
         }
     }
 
+    func setLocalDescription(_ sd: RTCSessionDescription) async throws -> RTCSessionDescription {
+        try await withUnsafeThrowingContinuation { continuation in
+            DispatchQueue.webRTC.async {  //<< once actor isolation is established, this becomes unnecessary
+                self.pc.setLocalDescription(sd) { error in
+                    
+                    guard error == nil else {
+                        let engineError = EngineError.webRTC(message: "failed to set local description", error)
+                        continuation.resume(throwing: engineError)
+                        return
+                    }
+                    
+                    continuation.resume(returning: sd)
+                }
+            }
+        }
+    }
+    
     func setLocalDescription(_ sd: RTCSessionDescription) -> Promise<RTCSessionDescription> {
 
         Promise<RTCSessionDescription>(on: .webRTC) { complete, fail in

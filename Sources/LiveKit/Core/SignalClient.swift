@@ -17,6 +17,7 @@
 import Foundation
 import WebRTC
 import Promises
+import Combine
 
 internal class SignalClient: MulticastDelegate<SignalClientDelegate> {
 
@@ -36,6 +37,11 @@ internal class SignalClient: MulticastDelegate<SignalClientDelegate> {
     }
 
     internal var _state = StateSync(State())
+    
+    enum Errors: Error {
+        case alreadyConnected
+        case invalidJoinResponse
+    }
 
     // MARK: - Private
 
@@ -55,14 +61,36 @@ internal class SignalClient: MulticastDelegate<SignalClientDelegate> {
 
     private var webSocket: WebSocket?
     private var latestJoinResponse: Livekit_JoinResponse?
+    
+    private var responseSubscriptions: Set<AnyCancellable> = []
+    private let receivedResponses: CurrentValueSubject<Livekit_SignalResponse?, Never>
+    var receivedResponsePublisher: AnyPublisher<Livekit_SignalResponse.OneOf_Message, Never> {
+        receivedResponses
+            .compactMap { [weak self] signalResponse in
+                guard let self else { return nil }
+                guard let message = signalResponse?.message else {
+                    self.log("Failed to decode SignalResponse", .warning)
+                    return nil
+                }
+                return message
+            }
+            .eraseToAnyPublisher()
+    }
+    
+    private let joinResponses: CurrentValueSubject<Livekit_JoinResponse?, Never>
 
     private var pingIntervalTimer: DispatchQueueTimer?
     private var pingTimeoutTimer: DispatchQueueTimer?
 
     init() {
+        receivedResponses = CurrentValueSubject(nil)
+        joinResponses = CurrentValueSubject(nil)
+        
         super.init()
 
         log()
+        
+        joinResponsesSubscription()
 
         // trigger events when state mutates
         self._state.onDidMutate = { [weak self] newState, oldState in
@@ -80,8 +108,118 @@ internal class SignalClient: MulticastDelegate<SignalClientDelegate> {
 
     deinit {
         log()
+        responseSubscriptions.removeAll()
+    }
+    
+    private func joinResponsesSubscription() {
+        receivedResponsePublisher
+            .compactMap {
+                guard case .join(let joinResponse) = $0 else { return nil }
+                return joinResponse
+            }
+            .assign(to: \.value, on: joinResponses)
+            .store(in: &responseSubscriptions)
+    }
+    
+    func _joinResponse() async throws -> Livekit_JoinResponse {
+        if #available(iOS 15.0, *) {
+            var result: Livekit_JoinResponse?
+            for await joinResponse in joinResponses.values {
+                guard let joinResponse else { continue }
+                result = joinResponse
+                break // << stop at the first valid join response
+            }
+            
+            guard let result else { throw Errors.invalidJoinResponse }
+            return result
+            
+        } else {
+            fatalError()
+        }
     }
 
+    func _connect(urlString: String, token: String, connectOptions: ConnectOptions? = nil, reconnectMode: ReconnectMode? = nil, adaptiveStream: Bool) async throws {
+        
+        guard self.webSocket == nil else { throw Errors.alreadyConnected }
+        
+        await _cleanUp()
+        
+        log("reconnectMode: \(String(describing: reconnectMode))")
+        
+        guard let url = Utils.buildUrl(urlString,
+                                       token,
+                                       connectOptions: connectOptions,
+                                       reconnectMode: reconnectMode,
+                                       adaptiveStream: adaptiveStream) else { throw InternalError.parse(message: "Failed to parse url") }
+        log("Connecting with url: \(urlString)")
+        
+        _state.mutate {
+            $0.reconnectMode = reconnectMode
+            $0.connectionState = .connecting
+        }
+        
+        let websocket = try await socketConnect(url: url, urlString: urlString, reconnectMode: reconnectMode) {
+            Utils.buildUrl(urlString,
+                           token,
+                           connectOptions: connectOptions,
+                           adaptiveStream: adaptiveStream,
+                           validate: true)
+        }
+        
+        self._state.mutate { $0.connectionState = .connected }
+        self.queue.async {
+            self.webSocket = websocket
+        }
+    }
+    
+    private func socketConnect(url: URL,
+                               urlString: String,
+                               reconnectMode: ReconnectMode? = nil,
+                               validatedURL: @escaping () -> URL?) async throws -> WebSocket {
+        
+        try await withUnsafeThrowingContinuation { continuation in
+            
+            WebSocket.connect(
+                url: url,
+                onMessage: self.onWebSocketMessage,
+                onDisconnect: { reason in
+                    self.cleanUp(reason: reason)
+                    self.queue.sync {
+                        self.webSocket = nil
+                    }
+                }
+            )
+            .then(on: queue) { (webSocket: WebSocket) -> Void in
+                dispatchPrecondition(condition: .onQueue(self.queue))
+                continuation.resume(returning: webSocket)
+            }
+            .recover(on: queue) { error -> Promise<Void> in
+                // Skip validation if reconnect mode
+                guard reconnectMode == nil else { throw error }
+                // Catch first, then throw again after getting validation response
+                // Re-build url with validate mode
+                guard let validateUrl = validatedURL() else {
+                    return Promise(InternalError.parse(message: "Failed to parse validation url"))
+                }
+                
+                self.log("Validating with url: \(validateUrl)")
+                
+                return HTTP().get(on: self.queue, url: validateUrl).then(on: self.queue) { data in
+                    guard let string = String(data: data, encoding: .utf8) else {
+                        throw SignalClientError.connect(message: "Failed to decode string")
+                    }
+                    self.log("validate response: \(string)")
+                    // re-throw with validation response
+                    throw SignalClientError.connect(message: string)
+                }
+            }
+            .catch(on: queue) { error in
+                self.cleanUp(reason: .networkError(error))
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+    
     func connect(_ urlString: String,
                  _ token: String,
                  connectOptions: ConnectOptions? = nil,
@@ -144,6 +282,52 @@ internal class SignalClient: MulticastDelegate<SignalClientDelegate> {
             }.catch(on: queue) { error in
                 self.cleanUp(reason: .networkError(error))
             }
+    }
+    
+    func _cleanUp(reason: DisconnectReason? = nil) async {
+        log("reason: \(String(describing: reason))")
+        
+        _state.mutate { $0.connectionState = .disconnected(reason: reason) }
+
+        pingIntervalTimer = nil
+        pingTimeoutTimer = nil
+
+        if let socket = webSocket {
+            socket.cleanUp(reason: reason, notify: false)
+            socket.onMessage = nil
+            socket.onDisconnect = nil
+            self.webSocket = nil
+        }
+
+        latestJoinResponse = nil
+
+        _state.mutate {
+            for var completer in $0.completersForAddTrack.values {
+                completer.reset()
+            }
+
+            $0.joinResponseCompleter.reset()
+
+            // reset state
+            $0 = State()
+        }
+
+        await withUnsafeContinuation { continuation in
+            requestDispatchQueue.async { [weak self] in
+                guard let self = self else { return }
+                self.requestQueue = []
+                continuation.resume()
+            }
+        }
+
+        await withUnsafeContinuation { continuation in
+            responseDispatchQueue.async { [weak self] in
+                guard let self = self else { return }
+                self.responseQueue = []
+                self.responseQueueState = .resumed
+                continuation.resume()
+            }
+        }
     }
 
     func cleanUp(reason: DisconnectReason? = nil) {
@@ -219,6 +403,34 @@ internal class SignalClient: MulticastDelegate<SignalClientDelegate> {
 
 private extension SignalClient {
 
+    func _sendRequest(_ request: Livekit_SignalRequest, enqueueIfReconnecting: Bool = true) async throws {
+        guard !(self._state.connectionState.isReconnecting && request.canEnqueue() && enqueueIfReconnecting) else {
+            self.log("queuing request while reconnecting, request: \(request)")
+            requestDispatchQueue.async {
+                self.requestQueue.append(request)
+            }
+            return
+        }
+        
+        guard case .connected = self.connectionState else {
+            self.log("not connected", .error)
+            throw SignalClientError.state(message: "Not connected")
+        }
+        
+        // this shouldn't happen
+        guard let webSocket = self.webSocket else {
+            self.log("webSocket is nil", .error)
+            throw SignalClientError.state(message: "WebSocket is nil")
+        }
+        
+        guard let data = try? request.serializedData() else {
+            self.log("could not serialize data", .error)
+            throw InternalError.convert(message: "Could not serialize data")
+        }
+        
+        try await webSocket.send(data: data)
+    }
+    
     // send request or enqueue while reconnecting
     func sendRequest(_ request: Livekit_SignalRequest, enqueueIfReconnecting: Bool = true) -> Promise<Void> {
 
@@ -275,13 +487,15 @@ private extension SignalClient {
             } else {
                 self.onSignalResponse(response)
             }
+            
+            self.receivedResponses.send(response)
         }
     }
 
     func onSignalResponse(_ response: Livekit_SignalResponse) {
 
         guard case .connected = connectionState else {
-            log("Not connected", .warning)
+            log("Not connected, received response though: \(response)", .warning)
             return
         }
 
@@ -367,6 +581,35 @@ private extension SignalClient {
 
 internal extension SignalClient {
 
+    func _resumeResponseQueue() async {
+        
+        await withUnsafeContinuation({ (continuation: UnsafeContinuation<Void, Never>) in
+            
+            responseDispatchQueue.async {
+                defer { self.responseQueueState = .resumed }
+                
+                // quickly return if no queued requests
+                guard !self.responseQueue.isEmpty else {
+                    self.log("No queued response")
+                    continuation.resume()
+                    return
+                }
+                
+                // send requests in sequential order
+                let promises = self.responseQueue.reduce(into: Promise(())) { result, response in
+                    result = result.then(on: self.queue) { self.onSignalResponse(response) }
+                }
+                
+                // clear the queue
+                self.responseQueue = []
+                
+                promises.then(on: self.queue) {
+                    continuation.resume()
+                }
+            }
+        })
+    }
+    
     func resumeResponseQueue() -> Promise<Void> {
 
         log()
@@ -425,6 +668,16 @@ internal extension SignalClient {
 
             return promises
         }
+    }
+    
+    func _sendOffer(offer: RTCSessionDescription) async throws {
+        log()
+
+        let request = Livekit_SignalRequest.with {
+            $0.offer = offer.toPBType()
+        }
+
+        try await _sendRequest(request)
     }
 
     func sendOffer(offer: RTCSessionDescription) -> Promise<Void> {
@@ -602,6 +855,19 @@ internal extension SignalClient {
         }
 
         return sendRequest(r)
+    }
+    
+    func sendLeave() async throws {
+        log()
+
+        let request = Livekit_SignalRequest.with {
+            $0.leave = Livekit_LeaveRequest.with {
+                $0.canReconnect = false
+                $0.reason = .clientInitiated
+            }
+        }
+
+        try await _sendRequest(request)
     }
 
     @discardableResult

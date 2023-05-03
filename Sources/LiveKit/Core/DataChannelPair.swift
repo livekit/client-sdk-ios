@@ -17,6 +17,127 @@
 import Foundation
 import WebRTC
 import Promises
+import AsyncAlgorithms
+
+class _DataChannelPair {
+    
+    public enum Errors: Error {
+        case decodeFailed
+    }
+    
+    let target: Livekit_SignalTarget
+    private let reliableChannel: RTCDataChannelObserver
+    private let lossyChannel: RTCDataChannelObserver
+    
+    var onDataPacket: OnDataPacket?
+    var dataPackets: AsyncStream<Livekit_DataPacket> {
+        AsyncStream<Livekit_DataPacket> { continuation in
+            //WIP:
+        }
+    }
+    
+    init(target: Livekit_SignalTarget, reliableChannel: RTCDataChannel? = nil, lossyChannel: RTCDataChannel? = nil) {
+        self.target = target
+        self.reliableChannel = RTCDataChannelObserver(channel: reliableChannel)
+        self.lossyChannel = RTCDataChannelObserver(channel: lossyChannel)
+    }
+    
+    public func set(reliable rChannel: RTCDataChannel?, lossy lChannel: RTCDataChannel?) {
+        self.reliableChannel.channel = rChannel
+        self.lossyChannel.channel = lChannel
+    }
+    
+    public func open() async throws {
+        await observeChannelStates(expectedReliableChannelState: .open, expectedLossyChannelState: .open)
+    }
+    
+    public func close() async {
+        await withTaskGroup(of: Void.self) { group in
+            [reliableChannel, lossyChannel].forEach { channel in
+                group.addTask {
+                    channel.close()
+                }
+            }
+            
+            group.addTask {
+                await self.observeChannelStates(expectedReliableChannelState: .closed, expectedLossyChannelState: .closed)
+            }
+        }
+    }
+    
+    private func observeChannelStates(expectedReliableChannelState: RTCDataChannelState, expectedLossyChannelState: RTCDataChannelState) async {
+        for await (reliableState, lossyState) in combineLatest(reliableChannel.states, lossyChannel.states) {
+            print("got reliable state: \(reliableState), lossy state: \(lossyState)")
+            guard reliableState == expectedReliableChannelState, lossyState == expectedLossyChannelState else { continue }
+            break //terminate asyncsequence
+        }
+    }
+        
+    final class RTCDataChannelObserver: NSObject, RTCDataChannelDelegate {
+        
+        var channel: RTCDataChannel? {
+            willSet {
+                channel?.delegate = nil
+            }
+            
+            didSet {
+                channel?.delegate = self
+            }
+        }
+        
+        private var stateUpdate: ((RTCDataChannelState) -> Void)?
+        private var messageReceived: ((RTCDataBuffer) -> Void)?
+        
+        var states: AsyncStream<RTCDataChannelState> {
+            AsyncStream { continuation in
+                stateUpdate = { state in
+                    continuation.yield(state)
+                }
+                
+                continuation.onTermination = { @Sendable _ in
+                    self.stateUpdate = nil
+                }
+            }
+        }
+        
+        var messages: AsyncStream<RTCDataBuffer> {
+            AsyncStream { continuation in
+                messageReceived = { buffer in
+                    continuation.yield(buffer)
+                }
+                
+                continuation.onTermination = { @Sendable _ in
+                    self.messageReceived = nil
+                }
+            }
+        }
+        
+        init(channel: RTCDataChannel? = nil) {
+            super.init()
+            self.channel = channel
+        }
+        
+        deinit {
+            print("DEBUG: deinit \(self)")
+        }
+        
+        func close() {
+            channel?.close()
+        }
+        
+        func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+            assert(dataChannel == channel)
+            stateUpdate?(dataChannel.readyState)
+        }
+        
+        func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+            assert(dataChannel == channel)
+            messageReceived?(buffer)
+        }
+    }
+}
+
+typealias OnDataPacket = (_ dataPacket: Livekit_DataPacket) -> Void
 
 internal class DataChannelPair: NSObject, Loggable {
 
@@ -65,6 +186,18 @@ internal class DataChannelPair: NSObject, Loggable {
     public func set(lossy channel: RTCDataChannel?) {
         self._lossyChannel = channel
         channel?.delegate = self
+
+        if isOpen {
+            openCompleter.fulfill(())
+        }
+    }
+    
+    public func set(reliable rChannel: RTCDataChannel?, lossy lChannel: RTCDataChannel?) {
+        self._reliableChannel = rChannel
+        rChannel?.delegate = self
+        
+        self._lossyChannel = lChannel
+        lChannel?.delegate = self
 
         if isOpen {
             openCompleter.fulfill(())

@@ -131,10 +131,12 @@ public enum NetworkError: LiveKitError {
 public enum TransportError: LiveKitError {
 
     case timedOut(message: String? = nil)
+    case noPrimary(message: String? = nil)
 
     public var description: String {
         switch self {
         case .timedOut(let message): return buildDescription("timedOut", message)
+        case .noPrimary(let message): return buildDescription("no primary", message)
         }
     }
 }

@@ -106,6 +106,10 @@ internal class WebSocket: NSObject, URLSessionWebSocketDelegate, Loggable {
             onDisconnect?(reason)
         }
     }
+    
+    public func send(data: Data) async throws {
+        try await self.task.send(URLSessionWebSocketTask.Message.data(data))
+    }
 
     public func send(data: Data) -> Promise<Void> {
         let message = URLSessionWebSocketTask.Message.data(data)

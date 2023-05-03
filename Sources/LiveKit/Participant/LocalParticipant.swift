@@ -202,7 +202,17 @@ public class LocalParticipant: Participant {
 
         publish(track: track, publishOptions: publishOptions)
     }
-
+    
+    public override func _unpublishAll(notify: Bool = true) async {
+        await withUnsafeContinuation { continuation in
+            _state.tracks.values.compactMap { $0 as? LocalTrackPublication }
+                .map { unpublish(publication: $0, notify: notify) }
+                .all(on: queue).then(on: queue) {
+                    continuation.resume()
+                }
+        }
+    }
+    
     public override func unpublishAll(notify _notify: Bool = true) -> Promise<Void> {
         // build a list of promises
         let promises = _state.tracks.values.compactMap { $0 as? LocalTrackPublication }

@@ -144,6 +144,12 @@ public class Participant: NSObject, ObservableObject, Loggable {
             }
         }
     }
+    
+    func _cleanUp(notify: Bool = true) async {
+        await self._unpublishAll(notify: notify)
+        // reset state
+        self._state.mutate { $0 = State(identity: $0.identity, name: $0.name) }
+    }
 
     @discardableResult
     internal func cleanUp(notify _notify: Bool = true) -> Promise<Void> {
@@ -152,6 +158,10 @@ public class Participant: NSObject, ObservableObject, Loggable {
             // reset state
             self._state.mutate { $0 = State(sid: $0.sid, identity: $0.identity, name: $0.name) }
         }
+    }
+    
+    func _unpublishAll(notify: Bool = true) async {
+        fatalError("implement in subclass")
     }
 
     internal func unpublishAll(notify _notify: Bool = true) -> Promise<Void> {
