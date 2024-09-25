@@ -118,6 +118,14 @@ public class VideoView: NativeView, Loggable {
         get { _state.isEnabled }
         set { _state.mutate { $0.isEnabled = newValue } }
     }
+    
+    @objc
+    public var isPaused: Bool {
+        get { _state.isPaused }
+        set { _state.mutate { $0.isPaused = newValue } }
+    }
+    
+    private var pausedVideoFrame: VideoFrame?
 
     @objc
     override public var isHidden: Bool {
@@ -190,6 +198,7 @@ public class VideoView: NativeView, Loggable {
     struct State {
         weak var track: Track?
         var isEnabled: Bool = true
+        var isPaused: Bool = false
         var isHidden: Bool = false
 
         // layout related
@@ -221,9 +230,11 @@ public class VideoView: NativeView, Loggable {
         var captureOptions: VideoCaptureOptions? = nil
         var captureDevice: AVCaptureDevice? = nil
 
+        var lastRenderedFrame: VideoFrame?
+        
         // whether if current state should be rendering
         var shouldRender: Bool {
-            track != nil && isEnabled && !isHidden
+            track != nil && isEnabled && !isHidden && !isPaused
         }
     }
 
@@ -284,15 +295,18 @@ public class VideoView: NativeView, Loggable {
                         // clean up old track
                         if let track = oldState.track as? VideoTrack {
                             track.remove(videoRenderer: self)
-
-                            if let r = self._primaryRenderer {
-                                r.removeFromSuperview()
-                                self._primaryRenderer = nil
-                            }
-
-                            if let r = self._secondaryRenderer {
-                                r.removeFromSuperview()
-                                self._secondaryRenderer = nil
+                            
+                            // avoid destroying and re-creating the renderers when the video is paused
+                            if !newState.isPaused {
+                                if let r = self._primaryRenderer {
+                                    r.removeFromSuperview()
+                                    self._primaryRenderer = nil
+                                }
+                                
+                                if let r = self._secondaryRenderer {
+                                    r.removeFromSuperview()
+                                    self._secondaryRenderer = nil
+                                }
                             }
                         }
 
@@ -305,7 +319,7 @@ public class VideoView: NativeView, Loggable {
                             track.add(videoRenderer: self)
 
                             if let frame = track._state.videoFrame {
-                                self.log("rendering cached frame tack: \(String(describing: track._state.sid))")
+                                self.log("rendering cached frame track: \(String(describing: track._state.sid))")
                                 nr.renderFrame(frame.toRTCType())
                                 self.setNeedsLayout()
                             }
@@ -313,7 +327,14 @@ public class VideoView: NativeView, Loggable {
                     }
 
                     if renderModeDidUpdate, !didReCreateNativeRenderer {
-                        self.recreatePrimaryRenderer(for: newState.renderMode)
+                        let nr = self.recreatePrimaryRenderer(for: newState.renderMode)
+                        
+                        // re-render last rendered frame before pause
+                        if let frame = newState.lastRenderedFrame, newState.isPaused {
+                            self.log("rendering last rendered frame before pause")
+                            nr.renderFrame(frame.toRTCType())
+                            self.setNeedsLayout()
+                        }
                     }
                 }
             }
@@ -625,6 +646,7 @@ extension VideoView: VideoRenderer {
             $0.didRenderFirstFrame = true
             $0.isRendering = true
             $0.renderDate = Date()
+            $0.lastRenderedFrame = frame
 
             // Update renderTarget if capture position changes
             if let oldCaptureDevicePosition, oldCaptureDevicePosition != captureDevice?.position {

@@ -29,6 +29,7 @@ public struct SwiftUIVideoView: NativeViewRepresentable {
     let renderMode: VideoView.RenderMode
     let rotationOverride: VideoRotation?
     let pinchToZoomOptions: VideoView.PinchToZoomOptions
+    let isPaused: Bool
     let isDebugMode: Bool
 
     let videoViewDelegateReceiver: VideoViewDelegateReceiver
@@ -40,6 +41,7 @@ public struct SwiftUIVideoView: NativeViewRepresentable {
                 rotationOverride: VideoRotation? = nil,
                 pinchToZoomOptions: VideoView.PinchToZoomOptions = [],
                 isDebugMode: Bool = false,
+                isPaused: Bool = false,
                 isRendering: Binding<Bool>? = nil)
     {
         self.track = track
@@ -48,6 +50,7 @@ public struct SwiftUIVideoView: NativeViewRepresentable {
         self.renderMode = renderMode
         self.rotationOverride = rotationOverride
         self.isDebugMode = isDebugMode
+        self.isPaused = isPaused
         self.pinchToZoomOptions = pinchToZoomOptions
 
         videoViewDelegateReceiver = VideoViewDelegateReceiver(isRendering: isRendering)
@@ -66,6 +69,7 @@ public struct SwiftUIVideoView: NativeViewRepresentable {
         videoView.renderMode = renderMode
         videoView.rotationOverride = rotationOverride
         videoView.pinchToZoomOptions = pinchToZoomOptions
+        videoView.isPaused = isPaused
         videoView.isDebugMode = isDebugMode
 
         Task.detached { @MainActor in
