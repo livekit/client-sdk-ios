@@ -20,12 +20,14 @@
 import ReplayKit
 #endif
 
+import Combine
 import LKObjCHelpers
 
 @available(macCatalyst 13.1, *)
 open class LKSampleHandler: RPBroadcastSampleHandler {
     private var clientConnection: BroadcastUploadSocketConnection?
     private var uploader: SampleUploader?
+    private var cancellable = Set<AnyCancellable>()
 
     override public init() {
         super.init()
@@ -40,6 +42,14 @@ open class LKSampleHandler: RPBroadcastSampleHandler {
 
             uploader = SampleUploader(connection: connection)
         }
+
+        DarwinNotificationCenter.shared
+            .publisher(for: .broadcastRequestStop)
+            .sink { [weak self] _ in
+                logger.info("Received stop request")
+                self?.finishBroadcastWithoutError()
+            }
+            .store(in: &cancellable)
     }
 
     override public func broadcastStarted(withSetupInfo _: [String: NSObject]?) {
@@ -89,8 +99,12 @@ open class LKSampleHandler: RPBroadcastSampleHandler {
         if let error {
             finishBroadcastWithError(error)
         } else {
-            LKObjCHelpers.finishBroadcastWithoutError(self)
+            finishBroadcastWithoutError()
         }
+    }
+    
+    private func finishBroadcastWithoutError() {
+        LKObjCHelpers.finishBroadcastWithoutError(self)
     }
 
     private func setupConnection() {
