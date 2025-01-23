@@ -295,6 +295,8 @@ public class AudioManager: Loggable {
 
     let admDelegateAdapter = AudioDeviceModuleDelegateAdapter()
 
+    public weak var screenShareAppAudioPlayerNode: AVAudioPlayerNode?
+
     init() {
         state = StateSync(State(engineObservers: [DefaultAudioSessionObserver()]))
         admDelegateAdapter.audioManager = self

@@ -98,9 +98,16 @@ public class MacOSScreenCapturer: VideoCapturer {
         configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         configuration.showsCursor = options.showCursor
 
+        if #available(macOS 13.0, *) {
+            configuration.capturesAudio = options.appAudio
+        }
+
         // Why does SCStream hold strong reference to delegate?
         let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: nil)
+        if #available(macOS 13.0, *) {
+            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: nil)
+        }
         try await stream.startCapture()
 
         _screenCapturerState.mutate { $0.scStream = stream }
@@ -200,7 +207,6 @@ extension MacOSScreenCapturer {
 @available(macOS 12.3, *)
 extension MacOSScreenCapturer: SCStreamOutput {
     public func stream(_: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
-
                        of outputType: SCStreamOutputType)
     {
         guard case .started = captureState else {
@@ -211,40 +217,50 @@ extension MacOSScreenCapturer: SCStreamOutput {
         // Return early if the sample buffer is invalid.
         guard sampleBuffer.isValid else { return }
 
-        guard case .screen = outputType else { return }
-
-        // Retrieve the array of metadata attachments from the sample buffer.
-        guard let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer,
-                                                                             createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
-            let attachments = attachmentsArray.first else { return }
-
-        // Validate the status of the frame. If it isn't `.complete`, return nil.
-        guard let statusRawValue = attachments[SCStreamFrameInfo.status] as? Int,
-              let status = SCFrameStatus(rawValue: statusRawValue),
-              status == .complete else { return }
-
-        // Retrieve the content rectangle, scale, and scale factor.
-        guard let contentRectDict = attachments[.contentRect],
-              let contentRect = CGRect(dictionaryRepresentation: contentRectDict as! CFDictionary),
-              // let contentScale = attachments[.contentScale] as? CGFloat,
-              let scaleFactor = attachments[.scaleFactor] as? CGFloat else { return }
-
-        // Schedule resend timer
-        let newTimer = Task.detached(priority: .utility) { [weak self] in
-            while true {
-                try? await Task.sleep(nanoseconds: UInt64(1 * 1_000_000_000))
-                if Task.isCancelled { break }
-                guard let self else { break }
-                try await self._capturePreviousFrame()
+        if case .audio = outputType {
+            if let pcm = sampleBuffer.toAVAudioPCMBuffer(),
+               let node = AudioManager.shared.screenShareAppAudioPlayerNode,
+               let engine = node.engine, engine.isRunning
+            {
+                node.scheduleBuffer(pcm)
+                if !node.isPlaying {
+                    node.play()
+                }
             }
-        }
+        } else if case .screen = outputType {
+            // Retrieve the array of metadata attachments from the sample buffer.
+            guard let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer,
+                                                                                 createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+                let attachments = attachmentsArray.first else { return }
 
-        _screenCapturerState.mutate {
-            $0.resendTimer?.cancel()
-            $0.resendTimer = newTimer
-        }
+            // Validate the status of the frame. If it isn't `.complete`, return nil.
+            guard let statusRawValue = attachments[SCStreamFrameInfo.status] as? Int,
+                  let status = SCFrameStatus(rawValue: statusRawValue),
+                  status == .complete else { return }
 
-        capture(sampleBuffer, contentRect: contentRect, scaleFactor: scaleFactor)
+            // Retrieve the content rectangle, scale, and scale factor.
+            guard let contentRectDict = attachments[.contentRect],
+                  let contentRect = CGRect(dictionaryRepresentation: contentRectDict as! CFDictionary),
+                  // let contentScale = attachments[.contentScale] as? CGFloat,
+                  let scaleFactor = attachments[.scaleFactor] as? CGFloat else { return }
+
+            // Schedule resend timer
+            let newTimer = Task.detached(priority: .utility) { [weak self] in
+                while true {
+                    try? await Task.sleep(nanoseconds: UInt64(1 * 1_000_000_000))
+                    if Task.isCancelled { break }
+                    guard let self else { break }
+                    try await self._capturePreviousFrame()
+                }
+            }
+
+            _screenCapturerState.mutate {
+                $0.resendTimer?.cancel()
+                $0.resendTimer = newTimer
+            }
+
+            capture(sampleBuffer, contentRect: contentRect, scaleFactor: scaleFactor)
+        }
     }
 }
 

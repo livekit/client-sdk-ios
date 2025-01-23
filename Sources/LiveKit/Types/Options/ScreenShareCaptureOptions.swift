@@ -34,17 +34,22 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
     @objc
     public let includeCurrentApplication: Bool
 
+    @objc
+    public let appAudio: Bool
+
     public init(dimensions: Dimensions = .h1080_169,
                 fps: Int = 30,
                 showCursor: Bool = true,
                 useBroadcastExtension: Bool = false,
-                includeCurrentApplication: Bool = false)
+                includeCurrentApplication: Bool = false,
+                appAudio: Bool = true)
     {
         self.dimensions = dimensions
         self.fps = fps
         self.showCursor = showCursor
         self.useBroadcastExtension = useBroadcastExtension
         self.includeCurrentApplication = includeCurrentApplication
+        self.appAudio = appAudio
     }
 
     // MARK: - Equal
@@ -55,7 +60,8 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
             fps == other.fps &&
             showCursor == other.showCursor &&
             useBroadcastExtension == other.useBroadcastExtension &&
-            includeCurrentApplication == other.includeCurrentApplication
+            includeCurrentApplication == other.includeCurrentApplication &&
+            appAudio == other.appAudio
     }
 
     override public var hash: Int {
@@ -65,6 +71,7 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
         hasher.combine(showCursor)
         hasher.combine(useBroadcastExtension)
         hasher.combine(includeCurrentApplication)
+        hasher.combine(appAudio)
         return hasher.finalize()
     }
 }

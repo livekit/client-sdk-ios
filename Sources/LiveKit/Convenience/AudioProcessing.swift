@@ -56,6 +56,17 @@ public extension LKAudioBuffer {
     }
 }
 
+public extension CMSampleBuffer {
+    func toAVAudioPCMBuffer() -> AVAudioPCMBuffer? {
+        let format = AVAudioFormat(cmAudioFormatDescription: formatDescription!)
+        let numSamples = AVAudioFrameCount(numSamples)
+        let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: numSamples)!
+        pcmBuffer.frameLength = numSamples
+        CMSampleBufferCopyPCMDataIntoAudioBufferList(self, at: 0, frameCount: Int32(numSamples), into: pcmBuffer.mutableAudioBufferList)
+        return pcmBuffer
+    }
+}
+
 public extension AVAudioPCMBuffer {
     /// Computes Peak and Linear Scale RMS Value (Average) for all channels.
     func audioLevels() -> [AudioLevel] {
