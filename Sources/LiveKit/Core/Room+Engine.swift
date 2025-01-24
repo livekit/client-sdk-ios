@@ -271,7 +271,7 @@ extension Room {
             throw LiveKitError(.invalidState)
         }
 
-        guard let url = _state.url, let token = _state.token else {
+        guard let url = _state.providedUrl, let token = _state.token else {
             log("[Connect] Url or token is nil", .error)
             throw LiveKitError(.invalidState)
         }
@@ -339,16 +339,46 @@ extension Room {
                 $0.connectionState = .reconnecting
             }
 
-            await cleanUp(isFullReconnect: true)
+            let (providedUrl, connectedUrl, token) = _state.read { ($0.providedUrl, $0.connectedUrl, $0.token) }
 
-            guard let url = _state.url,
-                  let token = _state.token
-            else {
+            guard let providedUrl, let connectedUrl, let token else {
                 log("[Connect] Url or token is nil")
                 throw LiveKitError(.invalidState)
             }
 
-            try await fullConnectSequence(url, token)
+            var nextUrl = connectedUrl
+            var nextRegion: RegionInfo?
+
+            while true {
+                do {
+                    // Prepare for next connect attempt.
+                    await cleanUp(isFullReconnect: true)
+
+                    try await fullConnectSequence(nextUrl, token)
+                    _state.mutate { $0.connectedUrl = nextUrl }
+                    // Exit loop on successful connection
+                    break
+                } catch {
+                    // Re-throw if is cancel.
+                    if error is CancellationError {
+                        throw error
+                    }
+
+                    if let region = nextRegion {
+                        nextRegion = nil
+                        log("Connect failed with region: \(region)")
+                        regionManager(addFailedRegion: region)
+                    }
+
+                    try Task.checkCancellation()
+
+                    if providedUrl.isCloud {
+                        let region = try await regionManagerResolveBest()
+                        nextUrl = region.url
+                        nextRegion = region
+                    }
+                }
+            }
         }
 
         do {
