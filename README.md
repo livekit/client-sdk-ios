@@ -125,7 +125,7 @@ extension RoomViewController: RoomDelegate {
 
 ### Screen Sharing
 
-See [iOS Screen Sharing instructions](https://github.com/livekit/client-sdk-swift/wiki/iOS-Screen-Sharing).
+See [iOS Screen Sharing instructions](Docs/ios-screen-sharing.md).
 
 ## Integration Notes
 
