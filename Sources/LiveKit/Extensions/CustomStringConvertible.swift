@@ -178,3 +178,14 @@ extension AVCaptureDevice.Format {
         return "Format(\(values.joined(separator: ", ")))"
     }
 }
+
+extension LKRTCAudioProcessingConfig {
+    func toDebugString() -> String {
+        "RTCAudioProcessingConfig(" +
+            "isEchoCancellationEnabled: \(isEchoCancellationEnabled), " +
+            "isNoiseSuppressionEnabled: \(isNoiseSuppressionEnabled), " +
+            "isAutoGainControl1Enabled: \(isAutoGainControl1Enabled), " +
+            "isHighpassFilterEnabled: \(isHighpassFilterEnabled)" +
+            ")"
+    }
+}

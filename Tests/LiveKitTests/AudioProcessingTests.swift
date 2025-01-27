@@ -17,6 +17,7 @@
 import Accelerate
 import AVFoundation
 import Foundation
+import LiveKitWebRTC
 
 @testable import LiveKit
 import XCTest
@@ -59,6 +60,64 @@ class AudioProcessingTests: XCTestCase, AudioCustomProcessingDelegate {
             // 3 secs...
             let ns = UInt64(5 * 1_000_000_000)
             try await Task.sleep(nanoseconds: ns)
+        }
+    }
+
+    func testOptionsAppliedToAudioProcessingModule() async throws {
+        try await withRooms([RoomTestingOptions(canPublish: true)]) { rooms in
+            // Alias to Room1
+            let room1 = rooms[0]
+
+            let allOnOptions = AudioCaptureOptions(
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                highpassFilter: true
+            )
+
+            let allOffOptions = AudioCaptureOptions(
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+                highpassFilter: false
+            )
+
+            let pub1 = try await room1.localParticipant.setMicrophone(enabled: true, captureOptions: allOnOptions)
+            guard let pub1 else {
+                XCTFail("Publication is nil")
+                return
+            }
+
+            let ns = UInt64(3 * 1_000_000_000)
+            try await Task.sleep(nanoseconds: ns)
+
+            // Directly read config from the apm
+            let allOnConfigResult = RTC.audioProcessingModule.config
+            print("Config result for all on: \(allOnConfigResult.toDebugString()))")
+            XCTAssert(allOnConfigResult.isEchoCancellationEnabled)
+            XCTAssert(allOnConfigResult.isNoiseSuppressionEnabled)
+            XCTAssert(allOnConfigResult.isAutoGainControl1Enabled)
+            XCTAssert(allOnConfigResult.isHighpassFilterEnabled)
+
+            try await room1.localParticipant.unpublish(publication: pub1)
+
+            let pub2 = try await room1.localParticipant.setMicrophone(enabled: true, captureOptions: allOffOptions)
+            guard let pub2 else {
+                XCTFail("Publication is nil")
+                return
+            }
+
+            try await Task.sleep(nanoseconds: ns)
+
+            // Directly read config from the apm
+            let allOffConfigResult = RTC.audioProcessingModule.config
+            print("Config result for all off: \(allOffConfigResult.toDebugString())")
+            XCTAssert(!allOffConfigResult.isEchoCancellationEnabled)
+            XCTAssert(!allOffConfigResult.isNoiseSuppressionEnabled)
+            XCTAssert(!allOffConfigResult.isAutoGainControl1Enabled)
+            XCTAssert(!allOffConfigResult.isHighpassFilterEnabled)
+
+            try await room1.localParticipant.unpublish(publication: pub2)
         }
     }
 }
