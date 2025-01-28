@@ -518,12 +518,11 @@ extension Room: AppStateDelegate {
 
 public extension Room {
     /// Set this to true to bypass initialization of voice processing.
-    /// Must be set before RTCPeerConnectionFactory gets initialized.
-    /// The most reliable place to set this is in your application's initialization process.
+    @available(*, deprecated, renamed: "AudioManager.shared.isVoiceProcessingBypassed")
     @objc
     static var bypassVoiceProcessing: Bool {
-        get { RTC.bypassVoiceProcessing }
-        set { RTC.bypassVoiceProcessing = newValue }
+        get { AudioManager.shared.isVoiceProcessingBypassed }
+        set { AudioManager.shared.isVoiceProcessingBypassed = newValue }
     }
 }
 

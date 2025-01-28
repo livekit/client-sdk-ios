@@ -24,39 +24,6 @@ internal import LiveKitWebRTC
 @_implementationOnly import LiveKitWebRTC
 #endif
 
-// Wrapper for LKRTCAudioBuffer
-@objc
-public class LKAudioBuffer: NSObject {
-    private let _audioBuffer: LKRTCAudioBuffer
-
-    @objc
-    public var channels: Int { _audioBuffer.channels }
-
-    @objc
-    public var frames: Int { _audioBuffer.frames }
-
-    @objc
-    public var framesPerBand: Int { _audioBuffer.framesPerBand }
-
-    @objc
-    public var bands: Int { _audioBuffer.bands }
-
-    @objc
-    @available(*, deprecated, renamed: "rawBuffer(forChannel:)")
-    public func rawBuffer(for channel: Int) -> UnsafeMutablePointer<Float> {
-        _audioBuffer.rawBuffer(forChannel: channel)
-    }
-
-    @objc
-    public func rawBuffer(forChannel channel: Int) -> UnsafeMutablePointer<Float> {
-        _audioBuffer.rawBuffer(forChannel: channel)
-    }
-
-    init(audioBuffer: LKRTCAudioBuffer) {
-        _audioBuffer = audioBuffer
-    }
-}
-
 // Audio Session Configuration related
 public class AudioManager: Loggable {
     // MARK: - Public
@@ -68,6 +35,8 @@ public class AudioManager: Loggable {
     #endif
 
     public typealias DeviceUpdateFunc = (_ audioManager: AudioManager) -> Void
+
+    public typealias OnSpeechActivityEvent = (_ audioManager: AudioManager, _ event: SpeechActivityEvent) -> Void
 
     #if os(iOS) || os(visionOS) || os(tvOS)
 
@@ -143,6 +112,8 @@ public class AudioManager: Loggable {
         public var sessionConfiguration: AudioSessionConfiguration?
         #endif
 
+        public var engineObservers = [any AudioEngineObserver]()
+
         public var trackState: TrackState {
             switch (localTracksCount > 0, remoteTracksCount > 0) {
             case (true, false): return .localOnly
@@ -213,13 +184,120 @@ public class AudioManager: Loggable {
         set { RTC.audioDeviceModule.inputDevice = newValue._ioDevice }
     }
 
-    public var onDeviceUpdate: DeviceUpdateFunc? {
-        didSet {
-            RTC.audioDeviceModule.setDevicesUpdatedHandler { [weak self] in
-                guard let self else { return }
-                self.onDeviceUpdate?(self)
+    public var onDeviceUpdate: DeviceUpdateFunc?
+
+    /// Detect voice activity even if the mic is muted.
+    /// Internal audio engine must be initialized by calling ``prepareRecording()`` or
+    /// connecting to a room and subscribing to a remote audio track or publishing a local audio track.
+    public var onMutedSpeechActivityEvent: OnSpeechActivityEvent?
+
+    /// Enables advanced ducking which ducks other audio based on the presence of voice activity from local and remote chat participants.
+    /// Default: true.
+    public var isAdvancedDuckingEnabled: Bool {
+        get { RTC.audioDeviceModule.isAdvancedDuckingEnabled }
+        set { RTC.audioDeviceModule.isAdvancedDuckingEnabled = newValue }
+    }
+
+    /// The ducking(audio reducing) level of other audio.
+    @available(iOS 17, macOS 14.0, visionOS 1.0, *)
+    public var duckingLevel: AudioDuckingLevel {
+        get { AudioDuckingLevel(rawValue: RTC.audioDeviceModule.duckingLevel) ?? .default }
+        set { RTC.audioDeviceModule.duckingLevel = newValue.rawValue }
+    }
+
+    /// Bypass Voice-Processing I/O of internal AVAudioEngine.
+    /// It is valid to toggle this at runtime.
+    public var isVoiceProcessingBypassed: Bool {
+        get { RTC.audioDeviceModule.isVoiceProcessingBypassed }
+        set { RTC.audioDeviceModule.isVoiceProcessingBypassed = newValue }
+    }
+
+    /// Bypass the Auto Gain Control of internal AVAudioEngine.
+    /// It is valid to toggle this at runtime.
+    public var isVoiceProcessingAGCEnabled: Bool {
+        get { RTC.audioDeviceModule.isVoiceProcessingAGCEnabled }
+        set { RTC.audioDeviceModule.isVoiceProcessingAGCEnabled = newValue }
+    }
+
+    /// Enables manual-rendering (no-device) mode of AVAudioEngine.
+    /// Currently experimental.
+    public var isManualRenderingMode: Bool {
+        get { RTC.audioDeviceModule.isManualRenderingMode }
+        set {
+            let result = RTC.audioDeviceModule.setManualRenderingMode(newValue)
+            if !result {
+                log("Failed to set manual rendering mode", .error)
             }
         }
+    }
+
+    // MARK: - Recording
+
+    /// Keep recording initialized (mic input) and pre-warm voice processing etc.
+    /// Mic permission is required and dialog will appear if not already granted.
+    /// This will per persisted accross Rooms and connections.
+    public var isRecordingAlwaysPrepared: Bool {
+        get { RTC.audioDeviceModule.isInitRecordingPersistentMode }
+        set { RTC.audioDeviceModule.isInitRecordingPersistentMode = newValue }
+    }
+
+    /// Starts mic input to the SDK even without any ``Room`` or a connection.
+    /// Audio buffers will flow into ``LocalAudioTrack/add(audioRenderer:)`` and ``capturePostProcessingDelegate``.
+    public func startLocalRecording() {
+        RTC.audioDeviceModule.initAndStartRecording()
+    }
+
+    /// Set a chain of ``AudioEngineObserver``s.
+    /// Defaults to having a single ``DefaultAudioSessionObserver`` initially.
+    ///
+    /// The first object will be invoked and is responsible for calling the next object.
+    /// See ``NextInvokable`` protocol for details.
+    ///
+    /// Objects set here will be retained.
+    public func set(engineObservers: [any AudioEngineObserver]) {
+        state.mutate { $0.engineObservers = engineObservers }
+    }
+
+    // MARK: - For testing
+
+    var isPlayoutInitialized: Bool {
+        RTC.audioDeviceModule.isPlayoutInitialized
+    }
+
+    var isPlaying: Bool {
+        RTC.audioDeviceModule.isPlaying
+    }
+
+    var isRecordingInitialized: Bool {
+        RTC.audioDeviceModule.isRecordingInitialized
+    }
+
+    var isRecording: Bool {
+        RTC.audioDeviceModule.isRecording
+    }
+
+    func initPlayout() {
+        RTC.audioDeviceModule.initPlayout()
+    }
+
+    func startPlayout() {
+        RTC.audioDeviceModule.startPlayout()
+    }
+
+    func stopPlayout() {
+        RTC.audioDeviceModule.stopPlayout()
+    }
+
+    func initRecording() {
+        RTC.audioDeviceModule.initRecording()
+    }
+
+    func startRecording() {
+        RTC.audioDeviceModule.startRecording()
+    }
+
+    func stopRecording() {
+        RTC.audioDeviceModule.stopRecording()
     }
 
     // MARK: - Internal
@@ -229,44 +307,34 @@ public class AudioManager: Loggable {
         case remote
     }
 
-    let state = StateSync(State())
+    let state: StateSync<State>
+
+    let admDelegateAdapter = AudioDeviceModuleDelegateAdapter()
+
+    init() {
+        state = StateSync(State(engineObservers: [DefaultAudioSessionObserver()]))
+        admDelegateAdapter.audioManager = self
+        RTC.audioDeviceModule.observer = admDelegateAdapter
+    }
 
     // MARK: - Private
 
-    private let _configureRunner = SerialRunnerActor<Void>()
-
-    #if os(iOS) || os(visionOS) || os(tvOS)
-    private func _asyncConfigure(newState: State, oldState: State) async throws {
-        try await _configureRunner.run {
-            self.log("\(oldState) -> \(newState)")
-            let configureFunc = newState.customConfigureFunc ?? self.defaultConfigureAudioSessionFunc
-            configureFunc(newState, oldState)
-        }
-    }
-    #endif
-
     func trackDidStart(_ type: Type) async throws {
-        let (newState, oldState) = state.mutate { state in
+        state.mutate { state in
             let oldState = state
             if type == .local { state.localTracksCount += 1 }
             if type == .remote { state.remoteTracksCount += 1 }
             return (state, oldState)
         }
-        #if os(iOS) || os(visionOS) || os(tvOS)
-        try await _asyncConfigure(newState: newState, oldState: oldState)
-        #endif
     }
 
     func trackDidStop(_ type: Type) async throws {
-        let (newState, oldState) = state.mutate { state in
+        state.mutate { state in
             let oldState = state
             if type == .local { state.localTracksCount = max(state.localTracksCount - 1, 0) }
             if type == .remote { state.remoteTracksCount = max(state.remoteTracksCount - 1, 0) }
             return (state, oldState)
         }
-        #if os(iOS) || os(visionOS) || os(tvOS)
-        try await _asyncConfigure(newState: newState, oldState: oldState)
-        #endif
     }
 
     #if os(iOS) || os(visionOS) || os(tvOS)

@@ -24,6 +24,14 @@ internal import LiveKitWebRTC
 
 @objc
 public final class AudioCaptureOptions: NSObject, CaptureOptions, Sendable {
+    public static let noProcessing = AudioCaptureOptions(
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        typingNoiseDetection: false,
+        highpassFilter: false
+    )
+
     @objc
     public let echoCancellation: Bool
 
