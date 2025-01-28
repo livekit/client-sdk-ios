@@ -52,6 +52,10 @@ public enum LiveKitErrorType: Int, Sendable {
     case unableToResolveFPSRange = 703
     case capturerDimensionsNotResolved = 704
     case deviceAccessDenied = 705
+
+    // LiveKit Cloud
+    case onlyForCloud = 901
+    case regionUrlProvider = 902
 }
 
 extension LiveKitErrorType: CustomStringConvertible {

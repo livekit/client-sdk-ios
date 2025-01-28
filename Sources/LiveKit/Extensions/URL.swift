@@ -28,4 +28,33 @@ extension URL {
     var isSecure: Bool {
         scheme == "https" || scheme == "wss"
     }
+
+    /// Checks whether the URL is a LiveKit Cloud URL.
+    var isCloud: Bool {
+        guard let host else { return false }
+        return host.hasSuffix(".livekit.cloud") || host.hasSuffix(".livekit.run")
+    }
+
+    func cloudConfigUrl() -> URL {
+        var components = URLComponents(url: self, resolvingAgainstBaseURL: false)!
+        components.scheme = scheme?.replacingOccurrences(of: "ws", with: "http")
+        components.path = "/settings"
+        return components.url!
+    }
+
+    func regionSettingsUrl() -> URL {
+        cloudConfigUrl().appendingPathComponent("/regions")
+    }
+
+    func toSocketUrl() -> URL {
+        var components = URLComponents(url: self, resolvingAgainstBaseURL: false)!
+        components.scheme = scheme?.replacingOccurrences(of: "http", with: "ws")
+        return components.url!
+    }
+
+    func toHTTPUrl() -> URL {
+        var components = URLComponents(url: self, resolvingAgainstBaseURL: false)!
+        components.scheme = scheme?.replacingOccurrences(of: "ws", with: "http")
+        return components.url!
+    }
 }
