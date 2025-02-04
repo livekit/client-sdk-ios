@@ -103,7 +103,7 @@ public extension AudioSessionConfiguration {
     }
 }
 
-extension AudioSessionConfiguration {
+public extension AudioSessionConfiguration {
     func toRTCType() -> LKRTCAudioSessionConfiguration {
         let configuration = LKRTCAudioSessionConfiguration.webRTC()
         configuration.category = category.rawValue
@@ -113,7 +113,7 @@ extension AudioSessionConfiguration {
     }
 }
 
-extension LKRTCAudioSession {
+public extension LKRTCAudioSession {
     func toAudioSessionConfiguration() -> AudioSessionConfiguration {
         AudioSessionConfiguration(category: AVAudioSession.Category(rawValue: category),
                                   categoryOptions: categoryOptions,
