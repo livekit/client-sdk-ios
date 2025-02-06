@@ -28,6 +28,9 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
     @objc
     public let showCursor: Bool
 
+    @objc
+    public let appAudio: Bool
+
     /// Use broadcast extension for screen capture (iOS only).
     ///
     /// If a broadcast extension has been properly configured, this defaults to `true`.
@@ -49,12 +52,14 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
     public init(dimensions: Dimensions = .h1080_169,
                 fps: Int = 30,
                 showCursor: Bool = true,
+                appAudio: Bool = true,
                 useBroadcastExtension: Bool = defaultToBroadcastExtension,
                 includeCurrentApplication: Bool = false)
     {
         self.dimensions = dimensions
         self.fps = fps
         self.showCursor = showCursor
+        self.appAudio = appAudio
         self.useBroadcastExtension = useBroadcastExtension
         self.includeCurrentApplication = includeCurrentApplication
     }
@@ -66,6 +71,7 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
         return dimensions == other.dimensions &&
             fps == other.fps &&
             showCursor == other.showCursor &&
+            appAudio == other.appAudio &&
             useBroadcastExtension == other.useBroadcastExtension &&
             includeCurrentApplication == other.includeCurrentApplication
     }
@@ -75,6 +81,7 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
         hasher.combine(dimensions)
         hasher.combine(fps)
         hasher.combine(showCursor)
+        hasher.combine(appAudio)
         hasher.combine(useBroadcastExtension)
         hasher.combine(includeCurrentApplication)
         return hasher.finalize()
