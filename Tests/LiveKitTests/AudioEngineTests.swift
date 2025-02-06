@@ -106,32 +106,55 @@ class AudioEngineTests: XCTestCase {
     }
 
     // Test start generating local audio buffer without joining to room.
-    func testPrejoinLocalAudioBuffer() async throws {
-        // Set up expectation...
-        let didReceiveAudioFrame = expectation(description: "Did receive audio frame")
-        didReceiveAudioFrame.assertForOverFulfill = false
+    func testPreconnectAudioBuffer() async throws {
+        print("Setting recording always prepared mode...")
+        AudioManager.shared.isRecordingAlwaysPrepared = true
 
-        // Start watching for audio frame...
-        let audioFrameWatcher = AudioTrackWatcher(id: "notifier01") { _ in
-            didReceiveAudioFrame.fulfill()
+        var counter = 0
+        // Executes 10 times by default.
+        measure {
+            counter += 1
+            print("Measuring attempt \(counter)...")
+            // Set up expectation...
+            let didReceiveAudioFrame = expectation(description: "Did receive audio frame")
+            didReceiveAudioFrame.assertForOverFulfill = false
+
+            let didConnectToRoom = expectation(description: "Did connect to room")
+            didConnectToRoom.assertForOverFulfill = false
+
+            // Create an audio frame watcher...
+            let audioFrameWatcher = AudioTrackWatcher(id: "notifier01") { _ in
+                didReceiveAudioFrame.fulfill()
+            }
+
+            let localMicTrack = LocalAudioTrack.createTrack()
+            // Attach audio frame watcher...
+            localMicTrack.add(audioRenderer: audioFrameWatcher)
+
+            Task.detached {
+                print("Starting local recording...")
+                AudioManager.shared.startLocalRecording()
+            }
+
+            // Wait for audio frame...
+            print("Waiting for first audio frame...")
+            // await fulfillment(of: [didReceiveAudioFrame], timeout: 10)
+            wait(for: [didReceiveAudioFrame], timeout: 30)
+
+            Task.detached {
+                print("Connecting to room...")
+                try await self.withRooms([RoomTestingOptions(canPublish: true)]) { rooms in
+                    print("Publishing mic...")
+                    try await rooms[0].localParticipant.setMicrophone(enabled: true)
+                    didConnectToRoom.fulfill()
+                }
+            }
+
+            print("Waiting for room to connect & disconnect...")
+            wait(for: [didConnectToRoom], timeout: 30)
+
+            localMicTrack.remove(audioRenderer: audioFrameWatcher)
         }
-
-        let localMicTrack = LocalAudioTrack.createTrack()
-        // Attach audio frame watcher...
-        localMicTrack.add(audioRenderer: audioFrameWatcher)
-
-        Task.detached {
-            print("Starting audio track in 3 seconds...")
-            try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
-            AudioManager.shared.startLocalRecording()
-        }
-
-        // Wait for audio frame...
-        print("Waiting for first audio frame...")
-        await fulfillment(of: [didReceiveAudioFrame], timeout: 10)
-
-        // Remove audio frame watcher...
-        localMicTrack.remove(audioRenderer: audioFrameWatcher)
     }
 
     // Test the manual rendering mode (no-device mode) of AVAudioEngine based AudioDeviceModule.
