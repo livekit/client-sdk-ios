@@ -14,27 +14,12 @@
  * limitations under the License.
  */
 
-#if swift(>=5.9)
-internal import LiveKitWebRTC
-#else
-@_implementationOnly import LiveKitWebRTC
+#if os(iOS)
+
+/// Message header for communication between uploader and receiver.
+enum BroadcastIPCHeader: Codable {
+    /// Image sample sent by uploader.
+    case image(BroadcastImageCodec.Metadata, VideoRotation)
+}
+
 #endif
-
-public enum VideoRotation: Int, Sendable, Codable {
-    case _0 = 0
-    case _90 = 90
-    case _180 = 180
-    case _270 = 270
-}
-
-extension RTCVideoRotation {
-    func toLKType() -> VideoRotation {
-        VideoRotation(rawValue: rawValue)!
-    }
-}
-
-extension VideoRotation {
-    func toRTCType() -> RTCVideoRotation {
-        RTCVideoRotation(rawValue: rawValue)!
-    }
-}
