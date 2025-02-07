@@ -14,31 +14,23 @@
  * limitations under the License.
  */
 
-import Foundation
+#if os(iOS)
 
-@propertyWrapper
-struct Atomic<Value> {
-    private var value: Value
-    private let lock = NSLock()
+@testable import LiveKit
+import XCTest
 
-    init(wrappedValue value: Value) {
-        self.value = value
+final class SocketPathTests: XCTestCase {
+    
+    func testValid() throws {
+        let path = "/tmp/a.sock"
+        let socketPath = try XCTUnwrap(SocketPath(path))
+        XCTAssertEqual(socketPath.path, path)
     }
-
-    var wrappedValue: Value {
-        get { load() }
-        set { store(newValue: newValue) }
-    }
-
-    func load() -> Value {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-
-    mutating func store(newValue: Value) {
-        lock.lock()
-        defer { lock.unlock() }
-        value = newValue
+    
+    func testInvalid() {
+        let longPath = String(repeating: "a", count: 104)
+        XCTAssertNil(SocketPath(longPath))
     }
 }
+
+#endif
