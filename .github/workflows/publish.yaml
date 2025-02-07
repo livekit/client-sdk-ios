@@ -1,0 +1,17 @@
+name: Bump version
+on:
+  workflow_dispatch:
+env:
+    PACKAGE_NAME: LiveKit
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ssh-key: ${{ secrets.NANPA_KEY }}
+      - uses: nbsp/ilo@v1
+        with:
+          packages: ${{ env.PACKAGE_NAME }}

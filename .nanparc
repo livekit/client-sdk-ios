@@ -1,0 +1,3 @@
+version 2.1.1
+name LiveKit
+custom ./scripts/replace_version.sh
